@@ -14,6 +14,8 @@ MICROSHIFT_RPM_SOURCE=${ROOTDIR}/_output/rpmbuild/
 AUTHORIZED_KEYS_FILE=
 AUTHORIZED_KEYS=
 PROMETHEUS=false
+POST_INCLUDE_SCRIPT=
+POST_INCLUDE=
 EMBED_CONTAINERS=false
 STARTTIME=$(date +%s)
 BUILDDIR=${ROOTDIR}/_output/image-builder
@@ -56,6 +58,9 @@ usage() {
     echo "  -prometheus"
     echo "          Add Prometheus process exporter to the image. See"
     echo "          https://github.com/ncabatoff/process-exporter for more information"
+    echo "  -post_include_script path_to_file"
+    echo "          Path to a file containing bash commands to be run from the post section"
+    echo "          of the kickstart file"
     exit 1
 }
 
@@ -187,6 +192,12 @@ while [ $# -gt 0 ] ; do
         PROMETHEUS=true
         shift
         ;;
+    -post_include_script)
+        shift
+        POST_INCLUDE_SCRIPT="$1"
+        [ -z "${POST_INCLUDE_SCRIPT}" ] && usage "Post include script not specified"
+        shift
+        ;;
     *)
         usage
         ;;
@@ -206,6 +217,14 @@ if [ -n "${AUTHORIZED_KEYS_FILE}" ]; then
         exit 1
     else
         AUTHORIZED_KEYS=$(cat ${AUTHORIZED_KEYS_FILE})
+    fi
+fi
+if [ -n "${POST_INCLUDE_SCRIPT}" ]; then
+    if [ ! -e ${POST_INCLUDE_SCRIPT} ]; then
+        echo "ERROR: post_include_script does not exist: ${POST_INCLUDE_SCRIPT}"
+        exit 1
+    else
+        POST_INCLUDE="$(cat ${POST_INCLUDE_SCRIPT})"
     fi
 fi
 
@@ -340,6 +359,7 @@ cat "${SCRIPTDIR}/config/kickstart.ks.template" \
     | sed "s;REPLACE_OCP_PULL_SECRET_CONTENTS;$(cat $OCP_PULL_SECRET_FILE | jq -c);g" \
     | sed "s;REPLACE_REDHAT_AUTHORIZED_KEYS_CONTENTS;${AUTHORIZED_KEYS};g" \
     | sed "s;REPLACE_BUILD_ARCH;${BUILD_ARCH};g" \
+    | awk -v r="$POST_INCLUDE" '{gsub(/REPLACE_POST_INCLUDE_SCRIPT/,r)}1' \
     > kickstart.ks
 
 # Run the ISO creation procedure

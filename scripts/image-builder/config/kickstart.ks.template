@@ -60,4 +60,7 @@ chown -R redhat:redhat /home/redhat/
 firewall-offline-cmd --zone=trusted --add-source=10.42.0.0/16
 firewall-offline-cmd --zone=trusted --add-source=169.254.169.1
 
+# Post include script
+REPLACE_POST_INCLUDE_SCRIPT
+
 %end
