@@ -11,11 +11,6 @@ Suite Setup         Setup
 Suite Teardown      Teardown
 
 
-*** Variables ***
-${USHIFT_HOST}      ${EMPTY}
-${USHIFT_USER}      ${EMPTY}
-
-
 *** Test Cases ***
 ConfigMap Contents
     [Documentation]  Check the version of the server
