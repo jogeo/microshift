@@ -27,7 +27,7 @@ part /boot --fstype=xfs --asprimary --size=800
 #part swap --fstype=swap --recommended
 part pv.01 --grow
 volgroup rhel pv.01
-logvol / --vgname=rhel --fstype=xfs --size=REPLACE_LVM_SYSROOT_SIZE --name=root
+logvol / --vgname=rhel --fstype=xfs --size=REPLACE_LVM_SYSROOT_SIZE --name=root --thin
 
 # Configure ostree
 ostreesetup --nogpg --osname=rhel --remote=edge --url=file:///run/install/repo/ostree/repo --ref=rhel/REPLACE_OSVERSION/REPLACE_BUILD_ARCH/edge
