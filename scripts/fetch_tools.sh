@@ -181,6 +181,7 @@ get_robotframework() {
     if [ ! -f "${venv}/bin/robot" ]; then
         python3 -m venv "${venv}"
         "${venv}/bin/python3" -m pip install --upgrade pip
+        "${venv}/bin/pip" install --upgrade pip
         "${venv}/bin/python3" -m pip install -r "${ROOT_DIR}/test/requirements.txt"
     fi
 }
