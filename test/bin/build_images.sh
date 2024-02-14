@@ -623,7 +623,7 @@ while getopts "dEfg:hiIl:sSt:" opt; do
             ;;
         t)
             TEMPLATE="${OPTARG}"
-            GROUP="$(basename "$(dirname "$(realpath "${OPTARG}")")")"
+            GROUP="$(dirname "$(realpath "${OPTARG}")")"
             selCount=$((selCount+1))
             FORCE_REBUILD=true
             ;;
