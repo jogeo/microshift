@@ -361,7 +361,13 @@ do_group() {
     done
 
     if ${BUILD_INSTALLER} && ! ${COMPOSER_DRY_RUN}; then
-        for image_installer in "${groupdir}"/*.image-installer; do
+        image_installer_list="${groupdir}"/*.image-installer
+        # If a template arg was given, only build the image installer for the
+        # matching template.
+        if [ -n "${template_arg}" ]; then
+            image_installer_list="${template_arg%.toml}".image-installer
+        fi
+        for image_installer in "${image_installer_list}"; do
             blueprint=$("${GOMPLATE}" --file "${image_installer}")
             local expected_iso_file="${VM_DISK_BASEDIR}/${blueprint}.iso"
             if [ -f "${expected_iso_file}" ]; then
