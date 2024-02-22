@@ -57,6 +57,7 @@ configure_package_sources() {
     export NEXT_REPO               # defined in common.sh
     export BASE_REPO               # defined in common.sh
     export YPLUS2_REPO             # defined in common.sh
+    export EXTERNAL_REPO           # defined in common.sh
     export CURRENT_RELEASE_REPO
     export PREVIOUS_RELEASE_REPO
 
@@ -68,7 +69,13 @@ configure_package_sources() {
     export SOURCE_VERSION_BASE
     export CURRENT_RELEASE_VERSION
     export PREVIOUS_RELEASE_VERSION
+    export EXTERNAL_VERSION
     export LATEST_RHOCP_MINOR
+
+    if [ -d "${LOCAL_REPO}" ] ; then
+        SOURCE_IMAGES="$(get_container_images "${SOURCE_VERSION}" "${IMAGEDIR}/rpm-repos")"
+        export SOURCE_IMAGES
+    fi
 
     # Add our sources. It is OK to run these steps repeatedly, if the
     # details change they are updated in the service.
@@ -78,6 +85,11 @@ configure_package_sources() {
         name=$(basename "${template}" .toml)
         outfile="${IMAGEDIR}/package-sources/${name}.toml"
 
+        # Make sure to delete potentially invalid sources
+        if sudo composer-cli sources list | grep "^${name}\$"; then
+            sudo composer-cli sources delete "${name}"
+        fi
+
         echo "Rendering ${template} to ${outfile}"
         ${GOMPLATE} --file "${template}" >"${outfile}"
         if [[ "$(wc -l "${outfile}" | cut -d ' ' -f1)" -eq 0 ]]; then
@@ -85,10 +97,15 @@ configure_package_sources() {
             continue
         fi
 
-        echo "Adding package source from ${outfile}"
-        if sudo composer-cli sources list | grep "^${name}\$"; then
-            sudo composer-cli sources delete "${name}"
+        # Skip non-existent local file:// packages 
+        echo "Checking ${outfile} local packages"
+        local package_url=$(grep '^url.*file://' "${outfile}" | awk -F= '{print $2}' | xargs)
+        if [ -n "${package_url}" ] && ! curl -I "${package_url}" &>/dev/null ; then
+            echo "WARNING: Templating '${template}' resulted in unaccessible '${package_url}'! - SKIPPING"
+            continue
         fi
+
+        echo "Adding package source from ${outfile}"
         sudo composer-cli sources add "${outfile}"
     done
 
@@ -253,9 +270,6 @@ do_group() {
     local template
     local template_list
 
-    SOURCE_IMAGES="$(get_container_images "${SOURCE_VERSION}" "${IMAGEDIR}/rpm-repos")"
-    export SOURCE_IMAGES
-
     echo "Existing images:"
     ls "${VM_DISK_BASEDIR}"/*.iso || echo "No ISO files in ${VM_DISK_BASEDIR}"
     ostree summary --view --repo="${IMAGEDIR}/repo" || echo "Could not get image list from ${IMAGEDIR}/repo"
@@ -362,15 +376,6 @@ do_group() {
 
     if ${BUILD_INSTALLER} && ! ${COMPOSER_DRY_RUN}; then
         for image_installer in "${groupdir}"/*.image-installer; do
-            # If a template arg was given, only build the image installer for the
-            # matching template.
-            if [ -n "${template_arg}" ]; then
-                installer_file=$(basename "$image_installer")
-                template_file=$(basename "${template_arg}")
-                if [ "${installer_file%.image-installer}" != "${template_file%.toml}" ]; then
-                    continue
-                fi
-            fi
             blueprint=$("${GOMPLATE}" --file "${image_installer}")
             local expected_iso_file="${VM_DISK_BASEDIR}/${blueprint}.iso"
             if [ -f "${expected_iso_file}" ]; then
@@ -554,8 +559,6 @@ build_images.sh [-iIsdf] [-l layer-dir | -g group-dir] [-t template]
 
   -d      Dry run by skipping the composer start commands.
 
-  -E      Do not extract container images.
-
   -f      Force rebuilding images that already exist.
 
   -g DIR  Build only one group (cannot be used with -l or -t).
@@ -591,15 +594,12 @@ GROUP=""
 TEMPLATE=""
 FORCE_REBUILD=false
 FORCE_SOURCE=false
-EXTRACT_CONTAINER_IMAGES=true
 
 selCount=0
-while getopts "dEfg:hiIl:sSt:" opt; do
+while getopts "dfg:hiIl:sSt:" opt; do
     case "${opt}" in
         d)
             COMPOSER_DRY_RUN=true
-            ;;
-        E)  EXTRACT_CONTAINER_IMAGES=false
             ;;
         f)
             FORCE_REBUILD=true
@@ -632,7 +632,7 @@ while getopts "dEfg:hiIl:sSt:" opt; do
             ;;
         t)
             TEMPLATE="${OPTARG}"
-            GROUP="$(dirname "$(realpath "${OPTARG}")")"
+            GROUP="$(basename "$(dirname "$(realpath "${OPTARG}")")")"
             selCount=$((selCount+1))
             FORCE_REBUILD=true
             ;;
@@ -652,36 +652,49 @@ if [ ! -f "${GOMPLATE}" ]; then
     "${ROOTDIR}/scripts/fetch_tools.sh" gomplate
 fi
 
-# Determine the version of the RPM in the local repo so we can use it
+# Determine the version of the RPM in the local or external repo so we can use it
 # in the blueprint templates.
-if [ ! -d "${LOCAL_REPO}" ]; then
+if [ ! -d "${LOCAL_REPO}" ] && [ ! -d "${EXTERNAL_REPO}" ]; then
     error "Run ${SCRIPTDIR}/create_local_repo.sh before building images."
     exit 1
 fi
-release_info_rpm=$(find "${LOCAL_REPO}" -name 'microshift-release-info-*.rpm' | sort | tail -n 1)
-if [ -z "${release_info_rpm}" ]; then
-    error "Failed to find microshift-release-info RPM in ${LOCAL_REPO}"
-    exit 1
-fi
-release_info_rpm_base=$(find "${BASE_REPO}" -name 'microshift-release-info-*.rpm' | sort | tail -n 1)
-if [ -z "${release_info_rpm_base}" ]; then
-    error "Failed to find microshift-release-info RPM in ${BASE_REPO}"
-    exit 1
-fi
-SOURCE_VERSION=$(rpm -q --queryformat '%{version}' "${release_info_rpm}")
-MINOR_VERSION=$(echo "${SOURCE_VERSION}" | cut -f2 -d.)
-PREVIOUS_MINOR_VERSION=$(( "${MINOR_VERSION}" - 1 ))
-FAKE_NEXT_MINOR_VERSION=$(( "${MINOR_VERSION}" + 1 ))
-FAKE_YPLUS2_MINOR_VERSION=$(( "${MINOR_VERSION}" + 2 ))
-SOURCE_VERSION_BASE=$(rpm -q --queryformat '%{version}' "${release_info_rpm_base}")
 
-current_version_repo=$(get_rel_version_repo "${MINOR_VERSION}")
-CURRENT_RELEASE_VERSION=$(echo "${current_version_repo}" | cut -d, -f1)
-CURRENT_RELEASE_REPO=$(echo "${current_version_repo}" | cut -d, -f2)
+if [ -d "${LOCAL_REPO}" ] ; then
+    release_info_rpm=$(find "${LOCAL_REPO}" -name 'microshift-release-info-*.rpm' | sort | tail -n 1)
+    if [ -z "${release_info_rpm}" ]; then
+        error "Failed to find microshift-release-info RPM in ${LOCAL_REPO}"
+        exit 1
+    fi
+    release_info_rpm_base=$(find "${BASE_REPO}" -name 'microshift-release-info-*.rpm' | sort | tail -n 1)
+    if [ -z "${release_info_rpm_base}" ]; then
+        error "Failed to find microshift-release-info RPM in ${BASE_REPO}"
+        exit 1
+    fi
 
-previous_version_repo=$(get_rel_version_repo "${PREVIOUS_MINOR_VERSION}")
-PREVIOUS_RELEASE_VERSION=$(echo "${previous_version_repo}" | cut -d, -f1)
-PREVIOUS_RELEASE_REPO=$(echo "${previous_version_repo}" | cut -d, -f2)
+    SOURCE_VERSION=$(rpm -q --queryformat '%{version}' "${release_info_rpm}")
+    MINOR_VERSION=$(echo "${SOURCE_VERSION}" | cut -f2 -d.)
+    PREVIOUS_MINOR_VERSION=$(( "${MINOR_VERSION}" - 1 ))
+    FAKE_NEXT_MINOR_VERSION=$(( "${MINOR_VERSION}" + 1 ))
+    FAKE_YPLUS2_MINOR_VERSION=$(( "${MINOR_VERSION}" + 2 ))
+    SOURCE_VERSION_BASE=$(rpm -q --queryformat '%{version}' "${release_info_rpm_base}")
+
+    current_version_repo=$(get_rel_version_repo "${MINOR_VERSION}")
+    CURRENT_RELEASE_VERSION=$(echo "${current_version_repo}" | cut -d, -f1)
+    CURRENT_RELEASE_REPO=$(echo "${current_version_repo}" | cut -d, -f2)
+
+    previous_version_repo=$(get_rel_version_repo "${PREVIOUS_MINOR_VERSION}")
+    PREVIOUS_RELEASE_VERSION=$(echo "${previous_version_repo}" | cut -d, -f1)
+    PREVIOUS_RELEASE_REPO=$(echo "${previous_version_repo}" | cut -d, -f2)
+fi
+
+if [ -d "${EXTERNAL_REPO}" ] ; then
+    release_info_rpm_external=$(find "${EXTERNAL_REPO}" -name 'microshift-release-info-*.rpm' | sort | tail -n 1)
+    if [ -z "${release_info_rpm_external}" ]; then
+        error "Failed to find microshift-release-info RPM in ${EXTERNAL_REPO}"
+        exit 1
+    fi
+    EXTERNAL_VERSION=$(rpm -q --queryformat '%{version}' "${release_info_rpm_external}")
+fi
 
 LATEST_RHOCP_MINOR="$("${SCRIPTDIR}/../../scripts/get-latest-rhocp-repo.sh")"
 
@@ -694,14 +707,16 @@ mkdir -p "${VM_DISK_BASEDIR}"
 
 configure_package_sources
 
-# Prepare container lists for mirroring registries.
+# Prepare container lists for mirroring registries
 rm -f "${CONTAINER_LIST}"
-if ${EXTRACT_CONTAINER_IMAGES}; then
+if [ -d "${LOCAL_REPO}" ] ; then
     extract_container_images "${SOURCE_VERSION}" "${LOCAL_REPO}" "${CONTAINER_LIST}"
-    # The following images are specific to layers that use fake rpms built from source.
     extract_container_images "4.${FAKE_NEXT_MINOR_VERSION}.*" "${NEXT_REPO}" "${CONTAINER_LIST}"
     extract_container_images "4.${FAKE_YPLUS2_MINOR_VERSION}.*" "${YPLUS2_REPO}" "${CONTAINER_LIST}"
     extract_container_images "${PREVIOUS_RELEASE_VERSION}" "${PREVIOUS_RELEASE_REPO}" "${CONTAINER_LIST}"
+fi
+if [ -d "${EXTERNAL_REPO}" ] ; then
+    extract_container_images "${EXTERNAL_VERSION}" "${EXTERNAL_REPO}" "${CONTAINER_LIST}"
 fi
 
 trap 'osbuild_logs' EXIT
