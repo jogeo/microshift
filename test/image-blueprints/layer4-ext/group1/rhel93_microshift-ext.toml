@@ -22,10 +22,6 @@ name = "microshift-selinux"
 version = "{{ .Env.SOURCE_VERSION }}"
 
 [[packages]]
-name = "microshift-olm"
-version = "{{ .Env.SOURCE_VERSION }}"
-
-[[packages]]
 name = "systemd-resolved"
 version = "*"
 
