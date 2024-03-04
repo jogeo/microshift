@@ -49,10 +49,6 @@ version = "*"
 name = "iproute-tc"
 version = "*"
 
-[[packages]]
-name = "kernel-modules-extra"
-version = "*"
-
 [customizations.services]
 enabled = ["microshift"]
 
